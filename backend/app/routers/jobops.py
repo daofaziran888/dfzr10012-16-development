@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
 from app.services.jobops import JobopsService
+from app.services.restart_admission import service as admission_service
 
 router = APIRouter(prefix="/api/jobops", tags=["流作业运维"])
 
@@ -30,6 +31,15 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+@router.get("/{entry_id}/admission", response_model=dict)
+def get_admission_check(entry_id: int) -> dict:
+    """跨业务链路共享的重启准入核对：按运行节点、重启次数与恢复条件读取同一份准入清单结论。"""
+    result = admission_service.evaluate_instance(entry_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"作业实例 {entry_id} 不存在或已归档")
+    return result
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
     """读取单条作业实例明细；不存在时给出可读的错误说明。"""
@@ -50,7 +60,10 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条作业实例执行启动作业、暂停作业、停止作业；不允许的动作会被拦下并说明原因。"""
+    """对单条作业实例执行启动作业、暂停作业、停止作业、重启作业。
+
+    重启作业受重启准入清单门禁：没有准入通过的生效单据时直接拦截并说明原因。
+    """
     action = str(payload.values.get("action") or "").strip()
     entry, message = service.run_action(entry_id, action)
     if entry is None:
